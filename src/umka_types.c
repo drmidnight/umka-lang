@@ -491,6 +491,16 @@ void typeAssertCompatible(Types *types, Type *left, Type *right, bool symmetric)
 }
 
 
+void typeAssertCompatibleParam(Types *types, Type *left, Type *right, Type *fnType, int paramIndex)
+{
+    if (!typeCompatible(left, right, false))
+    {
+        char rightBuf[DEFAULT_STR_LEN + 1], fnTypeBuf[DEFAULT_STR_LEN + 1];
+        types->error->handler(types->error->context, "Incompatible type %s for parameter %d to %s", typeSpelling(right, rightBuf), paramIndex, typeSpelling(fnType, fnTypeBuf));
+    }
+}
+
+
 void typeAssertCompatibleBuiltin(Types *types, Type *type, /*BuiltinFunc*/ int builtin, bool condition)
 {
     if (!condition)
@@ -515,11 +525,11 @@ bool typeValidOperator(Type *type, TokenKind op)
         case TOK_XOR:
         case TOK_SHL:
         case TOK_SHR:       return typeInteger(type);
-        case TOK_PLUSEQ:
+        case TOK_PLUSEQ:    return typeInteger(type) || typeReal(type) || type->kind == TYPE_STR;
         case TOK_MINUSEQ:
         case TOK_MULEQ:
-        case TOK_DIVEQ:     return typeInteger(type) || typeReal(type);
-        case TOK_MODEQ:
+        case TOK_DIVEQ:
+        case TOK_MODEQ:     return typeInteger(type) || typeReal(type);
         case TOK_ANDEQ:
         case TOK_OREQ:
         case TOK_XOREQ:
@@ -529,12 +539,12 @@ bool typeValidOperator(Type *type, TokenKind op)
         case TOK_OROR:      return type->kind == TYPE_BOOL;
         case TOK_PLUSPLUS:
         case TOK_MINUSMINUS:return typeInteger(type);
-        case TOK_EQEQ:      return typeOrdinal(type) || typeReal(type) || type->kind == TYPE_PTR || type->kind == TYPE_WEAKPTR || type->kind == TYPE_STR;
+        case TOK_EQEQ:      return typeOrdinal(type) || typeReal(type) || type->kind == TYPE_PTR || type->kind == TYPE_WEAKPTR || type->kind == TYPE_STR || type->kind == TYPE_ARRAY || type->kind == TYPE_STRUCT || type->kind == TYPE_FN;
         case TOK_LESS:
         case TOK_GREATER:   return typeOrdinal(type) || typeReal(type) || type->kind == TYPE_STR;
         case TOK_EQ:        return true;
         case TOK_NOT:       return type->kind == TYPE_BOOL;
-        case TOK_NOTEQ:     return typeOrdinal(type) || typeReal(type) || type->kind == TYPE_PTR || type->kind == TYPE_WEAKPTR || type->kind == TYPE_STR;
+        case TOK_NOTEQ:     return typeOrdinal(type) || typeReal(type) || type->kind == TYPE_PTR || type->kind == TYPE_WEAKPTR || type->kind == TYPE_STR || type->kind == TYPE_ARRAY || type->kind == TYPE_STRUCT || type->kind == TYPE_FN;
         case TOK_LESSEQ:
         case TOK_GREATEREQ: return typeOrdinal(type) || typeReal(type) || type->kind == TYPE_STR;
         default:            return false;
@@ -715,6 +725,36 @@ static char *typeSpellingRecursive(Type *type, char *buf, int size, int depth)
                 len += snprintf(buf + len, nonneg(size - len), "%s ", typeSpellingRecursive(type->field[i]->type, fieldBuf, DEFAULT_STR_LEN + 1, depth - 1));
             }
             len += snprintf(buf + len, nonneg(size - len), "}");
+        }
+        else if (type->kind == TYPE_FN)
+        {
+            len += snprintf(buf + len, nonneg(size - len), "fn (");
+
+            if (type->sig.method)
+            {
+                char paramBuf[DEFAULT_STR_LEN + 1];
+                len += snprintf(buf + len, nonneg(size - len), "%s) (", typeSpellingRecursive(type->sig.param[0]->type, paramBuf, DEFAULT_STR_LEN + 1, depth - 1));
+            }
+
+            int numPreHiddenParams = type->sig.method ? 1 : 0;                          // __self
+            int numPostHiddenParams = typeStructured(type->sig.resultType) ? 1 : 0;     // __result
+
+            for (int i = numPreHiddenParams; i < type->sig.numParams - numPostHiddenParams; i++)
+            {
+                if (i > numPreHiddenParams)
+                    len += snprintf(buf + len, nonneg(size - len), ", ");
+
+                char paramBuf[DEFAULT_STR_LEN + 1];
+                len += snprintf(buf + len, nonneg(size - len), "%s", typeSpellingRecursive(type->sig.param[i]->type, paramBuf, DEFAULT_STR_LEN + 1, depth - 1));
+            }
+
+            len += snprintf(buf + len, nonneg(size - len), ")");
+
+            if (type->sig.resultType->kind != TYPE_VOID)
+            {
+                char resultBuf[DEFAULT_STR_LEN + 1];
+                len += snprintf(buf + len, nonneg(size - len), ": %s", typeSpellingRecursive(type->sig.resultType, resultBuf, DEFAULT_STR_LEN + 1, depth - 1));
+            }
         }
         else
         {

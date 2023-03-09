@@ -226,7 +226,10 @@ static void parseShortAssignmentStmt(Compiler *comp, Type *type, TokenKind op)
     Type *rightType;
     parseExpr(comp, &rightType, NULL);
 
-    doApplyOperator(comp, &leftType, &rightType, NULL, NULL, lexShortAssignment(op), true, false);
+    // Keep "+=" for strings as is for better optimizations
+    const TokenKind shortOp = (leftType->kind == TYPE_STR && op == TOK_PLUSEQ) ? op : lexShortAssignment(op);
+
+    doApplyOperator(comp, &leftType, &rightType, NULL, NULL, shortOp, true, false);
     genChangeRefCntAssign(&comp->gen, type);
 }
 
@@ -732,9 +735,9 @@ static void parseForInHeader(Compiler *comp)
 
         switch (collectionType->kind)
         {
-            case TYPE_ARRAY:     genGetArrayPtr(&comp->gen, typeSize(&comp->types, collectionType->base), collectionType->numItems); break; // Use nominal length for range checking
+            case TYPE_ARRAY:     genGetArrayPtr(&comp->gen, typeSize(&comp->types, collectionType->base), collectionType->numItems); break;
             case TYPE_DYNARRAY:  genGetDynArrayPtr(&comp->gen);                                                                      break;
-            case TYPE_STR:       genGetArrayPtr(&comp->gen, typeSize(&comp->types, comp->charType), -1);                             break; // Use actual length for range checking
+            case TYPE_STR:       genGetArrayPtr(&comp->gen, typeSize(&comp->types, comp->charType), INT_MAX);                        break; // No range checking
             case TYPE_MAP:       genGetMapPtr(&comp->gen, collectionType);                                                           break;
             default:             break;
         }
@@ -979,8 +982,8 @@ void parseFnBlock(Compiler *comp, Ident *fn)
     identWarnIfUnusedAll(&comp->idents, blocksCurrent(&comp->blocks));
     identFree(&comp->idents, blocksCurrent(&comp->blocks));
 
-    int localVarSlots = align(comp->blocks.item[comp->blocks.top].localVarSize, sizeof(Slot)) / sizeof(Slot);
-    int paramSlots    = align(typeParamSizeTotal(&comp->types, &fn->type->sig), sizeof(Slot)) / sizeof(Slot);
+    const int localVarSlots = align(comp->blocks.item[comp->blocks.top].localVarSize, sizeof(Slot)) / sizeof(Slot);
+    const int paramSlots    = align(typeParamSizeTotal(&comp->types, &fn->type->sig), sizeof(Slot)) / sizeof(Slot);
 
     genLeaveFrameFixup(&comp->gen, localVarSlots, paramSlots);
     genReturn(&comp->gen, paramSlots);

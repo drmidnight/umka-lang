@@ -282,7 +282,7 @@ String assignment copies the contents of the string.
 
 #### Map types
 
-A map is a collection of items of a single type indexed by unique values, called *keys*, of another type. The key type cannot be an interface type.
+A map is a collection of items of a single type indexed by unique values, called *keys*, of another type. The key type must be comparable, i.e., the `==` and `!=` operators must be applicable to operands of this type.
 
 Syntax:
 
@@ -347,7 +347,7 @@ The interface does not implement these methods itself. Instead, any type that im
 
 Let`T` be a non-pointer type. If a pointer of type `^T` is converted to the interface, the interface stores that pointer. If a variable of type `T`  is converted to the interface, the variable is first copied to a new memory location, and the interface stores the pointer to that location. In any case, the interface can be converted back to the type `T` or  `^T`. If a conversion of the interface to some non-pointer type `S` not equivalent to `T` is attempted, a runtime error is triggered. If a conversion of the interface to some pointer type `^S` not equivalent to `^T` is attempted, the result is `null`. 
 
-Any type can be converted to the empty interface `interface{}`.
+Any type can be converted to the built-in type `any`, which is an alias for `interface{}`.
 
 Interface assignment copies the pointer, but not the contents of the variable that has been converted to the interface.
 
@@ -401,6 +401,7 @@ If a value `s` of type `S` is given where a value `t` of some other type `T` is 
 * `S` and `T` are ordinal types
 * `S` and `T` are pointer types and either `T` is `^void` or  `sizeof(s^) >= sizeof(t^)` and both `S` and `T` don't contain pointers
 * `S` is an interface type and `T` is a type (or a pointer to a type) that was actually converted to `S`
+* `S` is `[]U`, `T` is `[]V` and `U` can be explicitly converted to `V` 
 
 ## Declarations
 
@@ -454,6 +455,7 @@ bool
 char
 real32 real
 fiber
+any
 ```
 
 ### Constant declarations
@@ -618,10 +620,10 @@ fn log  (x: real): real         // Natural logarithm
 ##### Memory management functions
 
 ```
-fn new(T): ^T
+fn new(T [, x: T]): ^T
 ```
 
-Allocates memory for a variable of type `T` , initializes it with zeros and returns a pointer to it. 
+Allocates memory for a variable of type `T`, initializes it with zeros (or with the value `x` if specified) and returns a pointer to it. 
 
 ```
 fn make([]T, length: int): []T    // (1)
@@ -633,22 +635,25 @@ fn make(map[K]T): map[K]T         // (2)
 (2) Constructs an empty map with item type `T` indexed by keys of type `K`. 
 
 ```
-fn copy(a: []T): []T
+fn copy(a: []T): []T              // (1)
+fn copy(m: map[K]T): map[K]T      // (2)
 ```
 
-Constructs a copy of the dynamic array `a`.
+(1) Constructs a copy of the dynamic array `a`.
+
+(2) Constructs a copy of the map `m`.
 
 ```
 fn append(a: []T, x: (^T | []T)): []T
 ```
 
-Appends `x` to the dynamic array `a`. The `x` can be either a new item of the same type as the item type `T`  of `a`, or another dynamic array of the same item type `T`. If `a` has a capacity of at least `len(a) + len(x)` items, it is altered and returned. Otherwise, a new dynamic array is constructed and returned. 
+Appends `x` to the dynamic array `a`. The `x` can be either a new item of the same type as the item type `T`  of `a`, or another dynamic array of the same item type `T`. If `len(a) + len(x) <= cap(a)`, it is altered and returned. Otherwise, a new dynamic array is constructed and returned. 
 
 ```
 fn insert(a: []T, index: int, x: T): []T
 ```
 
-Inserts `x` into the dynamic array `a` at position `index`. The `x` should be a new item of the same type as the item type `T` of `a`. If `a` has a capacity of at least `len(a) + 1` items, it is altered and returned. Otherwise, a new dynamic array is constructed and returned.
+Inserts `x` into the dynamic array `a` at position `index`. The `x` should be a new item of the same type as the item type `T` of `a`. If `len(a) + 1 <= cap(a)`, it is altered and returned. Otherwise, a new dynamic array is constructed and returned.
 
 ```
 fn delete(a: []T, index: int): []T        // (1)
@@ -670,6 +675,12 @@ fn len(a: ([...]T | []T | map[K]T | str)): int
 ```
 
 Returns the length of `a`, where `a` can be an array, a dynamic array, a map or a string.
+
+```
+fn cap(a: []T): int
+```
+
+Returns the capacity of the dynamic array `a`, i.e., the number of items for which the space is allocated in `a`.
 
 ```
 fn sizeof(T | a: T): int
@@ -818,7 +829,7 @@ Examples:
 
 ```
 [3]real{2.3, -4.1 / 2, b}
-[]interface{}{7.2, "Hello", [2]int{3, 5}}
+[]any{7.2, "Hello", [2]int{3, 5}}
 map[[]int]str{[]int{13, 15}: "First", []int{57, 89}: "Second"}
 Vec{x: 2, y: 8}
 fn (x: int) {return 2 * x}
@@ -934,39 +945,41 @@ p != null && p[i] > 0
 #### Unary operators
 
 ```
-+      Unary plus                Integers, reals
--      Unary minus               Integers, reals
-~      Bitwise "not"             Integers
-!      Logical "not"             Booleans
-&      Address                   Addressable designators
++   Unary plus          Integers, reals
+-   Unary minus         Integers, reals
+~   Bitwise "not"       Integers
+!   Logical "not"       Booleans
+&   Address             Addressable designators
 ```
 
 #### Binary operators
 
 ```
-+      Sum                       Integers, reals, strings
--      Difference                Integers, reals
-*      Product                   Integers, reals
-/      Quotient                  Integers, reals
-%      Remainder                 Integers, reals
-&      Bitwise "and"             Integers
-|      Bitwise "or"              Integers
-~      Bitwise "xor"             Integers
-<<     Left shift                Integers
->>     Right shift               Integers
-&&     Logical "and"             Booleans
-||     Logical "or"              Booleans
-==     "Equal"                   Ordinals, reals, pointers, strings
-!=     "Not equal"               Ordinals, reals, pointers, strings
->      "Greater"                 Ordinals, reals, strings
-<      "Less"                    Ordinals, reals, strings
->=     "Greater or equal"        Ordinals, reals, strings
-<=     "Less or equal"           Ordinals, reals, strings
++   Sum                 Integers, reals, strings
+-   Difference          Integers, reals
+*   Product             Integers, reals
+/   Quotient            Integers, reals
+%   Remainder           Integers, reals
+&   Bitwise "and"       Integers
+|   Bitwise "or"        Integers
+~   Bitwise "xor"       Integers
+<<  Left shift          Integers
+>>  Right shift         Integers
+&&  Logical "and"       Booleans
+||  Logical "or"        Booleans
+==  "Equal"             Ordinals, reals, pointers, strings, arrays, structures, functions
+!=  "Not equal"         Ordinals, reals, pointers, strings, arrays, structures, functions
+>   "Greater"           Ordinals, reals, strings
+<   "Less"              Ordinals, reals, strings
+>=  "Greater or equal"  Ordinals, reals, strings
+<=  "Less or equal"     Ordinals, reals, strings
 ```
 
 The `/` operator performs an integer division (with the remainder discarded) if both operands are of integer types, otherwise it performs a real division.
 
 The `&&` and `||` operators don't evaluate the second operand if the first operand is sufficient to evaluate the result.
+
+The `==` and `!=` operators, when applied to arrays or structures, perform bitwise comparison.
 
 ##### Operand type conversions
 
@@ -1302,13 +1315,13 @@ The standard library is contained in the `std.um` module embedded into the Umka 
 #### Functions
 
 ```
-fn tobytes*(buf: interface{}): []uint8
+fn tobytes*(buf: any): []uint8
 ```
 
 Copies the bytes of `buf` to a byte array.
 
 ```
-fn frombytes*(buf: interface{}, bytes: []uint8)
+fn frombytes*(buf: any, bytes: []uint8)
 ```
 
 Copies the `bytes` array to `buf`. An error is triggered if some of the bytes represent a pointer.
@@ -1350,13 +1363,13 @@ fn fclose*(f: File): int
 Closes the file `f`. Returns 0 if successful.
 
 ```
-fn fread*(f: File, buf: interface{}): int
+fn fread*(f: File, buf: any): int
 ```
 
 Reads the `buf` variable from the file `f`. `buf` can be of any type that doesn't contain pointers, strings, dynamic arrays, interfaces or fibers, except for `^[]int8`, `^[]uint8`, `^[]char`. Returns 1 if successful.
 
 ```
-fn fwrite*(f: File, buf: interface{}): int
+fn fwrite*(f: File, buf: any): int
 ```
 
 Writes the `buf` variable to the file `f`. `buf` can be of any type that doesn't contain pointers, strings, dynamic arrays, interfaces or fibers, except for `^[]int8`, `^[]uint8`, `^[]char`. Returns 1 if successful.

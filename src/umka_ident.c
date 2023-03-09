@@ -55,9 +55,9 @@ Ident *identFind(Idents *idents, Modules *modules, Blocks *blocks, int module, c
             if (ident->hash == nameHash && strcmp(ident->name, name) == 0 && ident->block == blocks->item[i].block)
             {
                 // What we found has correct name and block scope, check module scope
-                const bool identModuleValid = ident->module == 0 ||                                                                             // Universe module
-                                             (ident->module == module && (blocks->module == module ||                                           // Current module
-                                             (ident->exported && (rcvType || modules->module[blocks->module]->importAlias[ident->module]))));   // Imported module
+                const bool identModuleValid = (ident->module == 0 && blocks->module == module) ||                                                // Universe module
+                                              (ident->module == module && (blocks->module == module ||                                           // Current module
+                                              (ident->exported && (rcvType || modules->module[blocks->module]->importAlias[ident->module]))));   // Imported module
 
                 if (identModuleValid)
                 {
@@ -229,6 +229,14 @@ Ident *identAddBuiltinFunc(Idents *idents, Modules *modules, Blocks *blocks, con
 }
 
 
+Ident *identAddModule(Idents *idents, Modules *modules, Blocks *blocks, const char *name, Type *type, int moduleVal)
+{
+    Ident *ident = identAdd(idents, modules, blocks, IDENT_MODULE, name, type, false);
+    ident->moduleVal = moduleVal;
+    return ident;
+}
+
+
 int identAllocStack(Idents *idents, Types *types, Blocks *blocks, Type *type)
 {
     int *localVarSize = NULL;
@@ -296,7 +304,7 @@ void identWarnIfUnused(Idents *idents, Ident *ident)
 {
     if (!ident->used)
     {
-        idents->error->warningHandler(idents->error->context, "Identifier %s is not used", ident->name);
+        idents->error->warningHandler(idents->error->context, "%s %s is not used", (ident->kind == IDENT_MODULE ? "Module" : "Identifier"), ident->name);
         ident->used = true;
     }
 }

@@ -57,6 +57,19 @@ char *storageAdd(Storage *storage, int size)
 
 // Modules
 
+static const char *moduleImplLibSuffix()
+{
+#ifdef UMKA_EXT_LIBS
+    #ifdef _WIN32
+        return "_windows";
+    #else
+        return "_linux";
+    #endif
+#endif
+    return "";
+}
+
+
 static void *moduleLoadImplLib(const char *path)
 {
 #ifdef UMKA_EXT_LIBS
@@ -168,33 +181,15 @@ int moduleFind(Modules *modules, const char *path)
 }
 
 
-int moduleFindImported(Modules *modules, Blocks *blocks, const char *alias, bool markAsUsed)
+int moduleFindImported(Modules *modules, Blocks *blocks, const char *alias)
 {
     for (int i = 0; i < modules->numModules; i++)
     {
         const char *importAlias = modules->module[blocks->module]->importAlias[i];
         if (importAlias && strcmp(importAlias, alias) == 0)
-        {
-            if (markAsUsed)
-                modules->module[blocks->module]->importUsed[i] = true;
             return i;
-        }
     }
     return -1;
-}
-
-
-void moduleWarnIfUnusedImports(Modules *modules, int module)
-{
-    for (int i = 0; i < modules->numModules; i++)
-    {
-        const char *importAlias = modules->module[module]->importAlias[i];
-        if (importAlias && !modules->module[module]->importUsed[i])
-        {
-            modules->error->warningHandler(modules->error->context, "Imported module %s is not used", importAlias);
-            modules->module[module]->importUsed[i] = true;
-        }
-    }
 }
 
 
@@ -225,21 +220,31 @@ int moduleAdd(Modules *modules, const char *path)
 
     module->pathHash = hash(path);
 
-    char libPath[2 + 2 * DEFAULT_STR_LEN + 4 + 1];
-    sprintf(libPath, "%s%s%s.umi", modulePathIsAbsolute(module->path) ? "" : "./", module->folder, module->name);
+    module->implLib = NULL;
+    if (modules->implLibsEnabled)
+    {
+        char libPath[2 + 2 * DEFAULT_STR_LEN + 8 + 4 + 1];
 
-    module->implLib = modules->implLibsEnabled ? moduleLoadImplLib(libPath) : NULL;
+        const char *pathPrefix = modulePathIsAbsolute(module->path) ? "" : "./";
+
+        // First, search for an implementation library with an OS-specific suffix
+        sprintf(libPath, "%s%s%s%s.umi", pathPrefix, module->folder, module->name, moduleImplLibSuffix());
+        module->implLib = moduleLoadImplLib(libPath);
+
+        // If not found, search for an implementation library without suffix
+        if (!module->implLib)
+        {
+            sprintf(libPath, "%s%s%s.umi", pathPrefix, module->folder, module->name);
+            module->implLib = moduleLoadImplLib(libPath);
+        }
+    }
 
     for (int i = 0; i < MAX_MODULES; i++)
-    {
         module->importAlias[i] = NULL;
-        module->importUsed[i] = false;
-    }
 
     // Self-import
     module->importAlias[modules->numModules] = malloc(DEFAULT_STR_LEN + 1);
     strcpy(module->importAlias[modules->numModules], name);
-    module->importUsed[modules->numModules] = true;
 
     modules->module[modules->numModules] = module;
     return modules->numModules++;

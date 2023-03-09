@@ -22,8 +22,6 @@ enum
     VM_MIN_HEAP_CHUNK    = 64,                      // Bytes
     VM_MIN_HEAP_PAGE     = 1024 * 1024,             // Bytes
 
-    VM_HEAP_CHUNK_MAGIC  = 0x1234567887654321LL,
-
     VM_FIBER_KILL_SIGNAL = -1                       // Used instead of return address in fiber function calls
 };
 
@@ -108,6 +106,7 @@ typedef enum
     BUILTIN_DELETE,
     BUILTIN_SLICE,
     BUILTIN_LEN,
+    BUILTIN_CAP,
     BUILTIN_SIZEOF,
     BUILTIN_SIZEOFSELF,
     BUILTIN_SELFHASPTR,
@@ -169,12 +168,12 @@ typedef struct
 {
     HeapPage *first, *last;
     int freeId;
+    Error *error;
 } HeapPages;
 
 
 typedef struct
 {
-    int64_t magic;
     int refCnt;
     int size;
     struct tagType *type;       // Optional type for garbage collection

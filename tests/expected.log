@@ -130,6 +130,9 @@ foo: { "Hello World" "Hallo Welt" "Salut le Monde" }
 foo: Hallo Welt = Hallo Welt : true 
 foo: Salut le Monde = Salut le Monde : true 
 bar: { { 3 5 } { 4 6 -8 } { 9 } { } { } }  = { { 3 5 } { 4 6 -8 } { 9 } { } { } } 
+{ 5.000000 7.000000 9.000000 11.000000 13.000000 15.000000 17.000000 } 
+true false 
+{ "Hello World" "Privet Mir" "Ha-ha" "Ho-ho" } 
 
 
 >>> Strings
@@ -305,6 +308,11 @@ Test 4
 Test 5
 { 19 : 53 17 : 42 } 
 
+Test 6
+{ "one" : { 1.000000 2.000000 } "e" : { 2.720000 5.440000 } "ten" : { 10.000000 20.000000 } "pi" : { 3.140000 6.280000 } } 
+{ "e" : { 2.720000 5.440000 } "ten" : { 10.000000 20.000000 } "pi" : { 3.140000 6.280000 } } 
+{ "one" : { 1.000000 2.000000 } "e" : { 2.720000 5.440000 } "ten" : { 10.000000 20.000000 } } 
+
 
 >>> Multiple returns
 
@@ -365,7 +373,6 @@ repr():
 { q: { 1.000000 0.000000 0.000000 0.000000 } normalized: true } 
 4.680000 
 'a' 
-fn 
 { 0.500000 0.700000 0.900000 } 
 
 
@@ -464,6 +471,11 @@ Utils from lib 1
 Utils from lib 2
 
 
+>>> Import disambiguation - 3
+
+42 43 1 
+
+
 >>> Simulated closures
 
 running by_name_eq with name : Foo
@@ -482,6 +494,57 @@ len = 0, 6
 Hello 
 true false true 
 false true false 
+
+{ } 
+len = 0   cap = 0 
+
+{ } 
+len = 0   cap = 0 
+
+{ "Hello" "World" } 
+    Item #0  = "Hello" 
+    Item #1  = "World" 
+len = 2   cap = 6 
+
+{ } 
+len = 0   cap = 0 
+
+{ "Hello" "World" } 
+    Item #0  = "Hello" 
+    Item #1  = "World" 
+len = 2   cap = 6 
+
+{ "Hello" "World" } 
+    Item #0  = "Hello" 
+    Item #1  = "World" 
+len = 2   cap = 6 
+
+{ "World" } 
+    Item #0  = "World" 
+len = 1   cap = 2 
+
+{ } 
+len = 0   cap = 2 
+
+{ "" "" } { "Hello" "World" } 
+"" 
+
+{ } 
+len = 0 
+
+{ "Hehe" : "Huhu" "Haha" : "Hoho" } 
+    Item "Hehe"  = "Huhu" 
+    Item "Haha"  = "Hoho" 
+len = 2 
+
+{ "Hello" : "World" } 
+    Item "Hello"  = "World" 
+len = 1 
+
+{ "Bubu" : "Bobo" } 
+    Item "Bubu"  = "Bobo" 
+len = 1 
+false true 
 
 
 >>> Variadic functions

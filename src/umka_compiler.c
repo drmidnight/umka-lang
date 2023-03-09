@@ -33,6 +33,11 @@ static void compilerDeclareBuiltinTypes(Compiler *comp)
 
     comp->ptrVoidType       = typeAddPtrTo(&comp->types, &comp->blocks, comp->voidType);
     comp->ptrNullType       = typeAddPtrTo(&comp->types, &comp->blocks, comp->nullType);
+
+    comp->anyType           = typeAdd(&comp->types, &comp->blocks, TYPE_INTERFACE);
+
+    typeAddField(&comp->types, comp->anyType, comp->ptrVoidType, "__self");
+    typeAddField(&comp->types, comp->anyType, comp->ptrVoidType, "__selftype");
 }
 
 
@@ -62,6 +67,7 @@ static void compilerDeclareBuiltinIdents(Compiler *comp)
     identAddType(&comp->idents, &comp->modules, &comp->blocks,  "real32",   comp->real32Type,  true);
     identAddType(&comp->idents, &comp->modules, &comp->blocks,  "real",     comp->realType,    true);
     identAddType(&comp->idents, &comp->modules, &comp->blocks,  "fiber",    comp->fiberType,   true);
+    identAddType(&comp->idents, &comp->modules, &comp->blocks,  "any",      comp->anyType,     true);
 
     // Built-in functions
     // I/O
@@ -95,6 +101,7 @@ static void compilerDeclareBuiltinIdents(Compiler *comp)
     identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "delete",     comp->ptrVoidType, BUILTIN_DELETE);
     identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "slice",      comp->ptrVoidType, BUILTIN_SLICE);
     identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "len",        comp->intType,     BUILTIN_LEN);
+    identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "cap",        comp->intType,     BUILTIN_CAP);
     identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "sizeof",     comp->intType,     BUILTIN_SIZEOF);
     identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "sizeofself", comp->intType,     BUILTIN_SIZEOFSELF);
     identAddBuiltinFunc(&comp->idents, &comp->modules, &comp->blocks, "selfhasptr", comp->boolType,    BUILTIN_SELFHASPTR);

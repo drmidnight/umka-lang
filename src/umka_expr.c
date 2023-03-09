@@ -12,6 +12,7 @@
 
 
 static void parseDynArrayLiteral(Compiler *comp, Type **type, Const *constant);
+static void doExplicitTypeConv(Compiler *comp, Type *dest, Type **src, Const *constant, bool lhs);
 
 
 void doPushConst(Compiler *comp, Type *type, Const *constant)
@@ -223,6 +224,93 @@ static void doArrayToDynArrayConv(Compiler *comp, Type *dest, Type **src, Const 
 
     // Copy result to a temporary local variable to collect it as garbage when leaving the block
     doCopyResultToTempVar(comp, dest);
+
+    *src = dest;
+}
+
+
+static void doDynArrayToDynArrayConv(Compiler *comp, Type *dest, Type **src, Const *constant)
+{
+    if (constant)
+        comp->error.handler(comp->error.context, "Conversion from dynamic array is not allowed in constant expressions");
+
+    // Get source array length: length = len(srcArray)
+    int lenOffset = identAllocStack(&comp->idents, &comp->types, &comp->blocks, comp->intType);
+
+    genDup(&comp->gen);
+    genCallBuiltin(&comp->gen, (*src)->kind, BUILTIN_LEN);
+    genPushLocalPtr(&comp->gen, lenOffset);
+    genSwapAssign(&comp->gen, TYPE_INT, 0);
+
+    // Allocate destination array: destArray = make(dest, length)
+    IdentName destArrayName;
+    identTempVarName(&comp->idents, destArrayName);
+
+    Ident *destArray = identAllocVar(&comp->idents, &comp->types, &comp->modules, &comp->blocks, destArrayName, dest, false);
+    doZeroVar(comp, destArray);
+
+    genPushGlobalPtr(&comp->gen, dest);
+    genPushLocal(&comp->gen, TYPE_INT, lenOffset);
+    doPushVarPtr(comp, destArray);
+    genCallBuiltin(&comp->gen, dest->kind, BUILTIN_MAKE);
+    genPop(&comp->gen);
+
+    // Loop initialization: index = length - 1
+    int indexOffset = identAllocStack(&comp->idents, &comp->types, &comp->blocks, comp->intType);
+
+    genPushLocal(&comp->gen, TYPE_INT, lenOffset);
+    genPushIntConst(&comp->gen, 1);
+    genBinary(&comp->gen, TOK_MINUS, TYPE_INT, 0);
+    genPushLocalPtr(&comp->gen, indexOffset);
+    genSwapAssign(&comp->gen, TYPE_INT, 0);
+
+    // Loop condition: index >= 0
+    genWhileCondProlog(&comp->gen);
+
+    genPushLocal(&comp->gen, TYPE_INT, indexOffset);
+    genPushIntConst(&comp->gen, 0);
+    genBinary(&comp->gen, TOK_GREATEREQ, TYPE_INT, 0);
+
+    genWhileCondEpilog(&comp->gen);
+
+    // Additional scope embracing temporary variables declaration
+    blocksEnter(&comp->blocks, NULL);
+
+    // Loop body: destArray[index] = destItemType(srcArray[index]); index--
+    genDup(&comp->gen);
+    genPushLocal(&comp->gen, TYPE_INT, indexOffset);
+    genGetDynArrayPtr(&comp->gen);
+    genDeref(&comp->gen, (*src)->base->kind);
+
+    Type *castType = (*src)->base;
+    doExplicitTypeConv(comp, dest->base, &castType, constant, false);
+
+    if (!typeEquivalent(dest->base, castType))
+    {
+        char srcBuf[DEFAULT_STR_LEN + 1], destBuf[DEFAULT_STR_LEN + 1];
+        comp->error.handler(comp->error.context, "Cannot cast %s to %s", typeSpelling((*src)->base, srcBuf), typeSpelling(dest->base, destBuf));
+    }
+
+    doPushVarPtr(comp, destArray);
+    genDeref(&comp->gen, dest->kind);
+    genPushLocal(&comp->gen, TYPE_INT, indexOffset);
+    genGetDynArrayPtr(&comp->gen);
+    genSwapChangeRefCntAssign(&comp->gen, dest->base);
+
+    genPushLocalPtr(&comp->gen, indexOffset);
+    genUnary(&comp->gen, TOK_MINUSMINUS, TYPE_INT);
+
+    // Additional scope embracing temporary variables declaration
+    doGarbageCollection(comp, blocksCurrent(&comp->blocks));
+    identWarnIfUnusedAll(&comp->idents, blocksCurrent(&comp->blocks));
+    blocksLeave(&comp->blocks);
+
+    genWhileEpilog(&comp->gen);
+
+    // Remove srcArray and push destArray
+    genPop(&comp->gen);
+    doPushVarPtr(comp, destArray);
+    genDeref(&comp->gen, dest->kind);
 
     *src = dest;
 }
@@ -482,23 +570,32 @@ static void doExplicitTypeConv(Compiler *comp, Type *dest, Type **src, Const *co
             doInterfaceToValueConv(comp, dest, src, constant);
         }
     }
+
+    // Dynamic array to dynamic array of another base type (covariant arrays)
+    else if ((*src)->kind == TYPE_DYNARRAY && dest->kind == TYPE_DYNARRAY)
+    {
+        doDynArrayToDynArrayConv(comp, dest, src, constant);
+    }
 }
 
 
-static void doApplyStrCat(Compiler *comp, Const *constant, Const *rightConstant)
+static void doApplyStrCat(Compiler *comp, Const *constant, Const *rightConstant, TokenKind op)
 {
     if (constant)
     {
+        if (op == TOK_PLUSEQ)
+            comp->error.handler(comp->error.context, "Operator is not allowed in constant expressions");
+
         int bufLen = strlen((char *)constant->ptrVal) + strlen((char *)rightConstant->ptrVal) + 1;
         char *buf = storageAdd(&comp->storage, bufLen);
         strcpy(buf, (char *)constant->ptrVal);
 
         constant->ptrVal = buf;
-        constBinary(&comp->consts, constant, rightConstant, TOK_PLUS, TYPE_STR);
+        constBinary(&comp->consts, constant, rightConstant, TOK_PLUS, TYPE_STR);    // "+" only
     }
     else
     {
-        genBinary(&comp->gen, TOK_PLUS, TYPE_STR, 0);
+        genBinary(&comp->gen, op, TYPE_STR, 0);                                     // "+" or "+=" only
         doCopyResultToTempVar(comp, comp->strType);
     }
 }
@@ -518,14 +615,14 @@ void doApplyOperator(Compiler *comp, Type **type, Type **rightType, Const *const
 
     if (apply)
     {
-        if ((*type)->kind == TYPE_STR && op == TOK_PLUS)
-            doApplyStrCat(comp, constant, rightConstant);
+        if ((*type)->kind == TYPE_STR && (op == TOK_PLUS || op == TOK_PLUSEQ))
+            doApplyStrCat(comp, constant, rightConstant, op);
         else
         {
             if (constant)
                 constBinary(&comp->consts, constant, rightConstant, op, (*type)->kind);
             else
-                genBinary(&comp->gen, op, (*type)->kind, 0);
+                genBinary(&comp->gen, op, (*type)->kind, typeSize(&comp->types, *type));
         }
     }
 }
@@ -535,20 +632,16 @@ void doApplyOperator(Compiler *comp, Type **type, Type **rightType, Const *const
 Ident *parseQualIdent(Compiler *comp)
 {
     lexCheck(&comp->lex, TOK_IDENT);
-    int module = moduleFindImported(&comp->modules, &comp->blocks, comp->lex.tok.name, true);
-    if (module >= 0)
-    {
-        if (identFind(&comp->idents, &comp->modules, &comp->blocks, comp->blocks.module, comp->lex.tok.name, NULL, false))
-            comp->error.handler(comp->error.context, "Conflict between module %s and identifier %s", comp->lex.tok.name, comp->lex.tok.name);
+    Ident *ident = identAssertFind(&comp->idents, &comp->modules, &comp->blocks, comp->blocks.module, comp->lex.tok.name, NULL);
 
+    if (ident->kind == IDENT_MODULE)
+    {
         lexNext(&comp->lex);
         lexEat(&comp->lex, TOK_PERIOD);
         lexCheck(&comp->lex, TOK_IDENT);
-    }
-    else
-        module = comp->blocks.module;
 
-    Ident *ident = identAssertFind(&comp->idents, &comp->modules, &comp->blocks, module, comp->lex.tok.name, NULL);
+        ident = identAssertFind(&comp->idents, &comp->modules, &comp->blocks, ident->moduleVal, comp->lex.tok.name, NULL);
+    }
 
     if (identIsOuterLocalVar(&comp->blocks, ident))
         comp->error.handler(comp->error.context, "Closures are not supported, cannot close over %s", ident->name);
@@ -659,18 +752,33 @@ static void parseBuiltinMathCall(Compiler *comp, Type **type, Const *constant, B
 }
 
 
-// fn new(type: Type, size: int): ^type
+// fn new(type: Type, size: int [, expr: type]): ^type
 static void parseBuiltinNewCall(Compiler *comp, Type **type, Const *constant)
 {
     if (constant)
         comp->error.handler(comp->error.context, "Function is not allowed in constant expressions");
 
+    // Type
     *type = parseType(comp, NULL);
     int size = typeSize(&comp->types, *type);
 
     genPushGlobalPtr(&comp->gen, *type);
     genPushIntConst(&comp->gen, size);
     genCallBuiltin(&comp->gen, TYPE_PTR, BUILTIN_NEW);
+
+    // Initializer expression
+    if (comp->lex.tok.kind == TOK_COMMA)
+    {
+        lexNext(&comp->lex);
+        genDup(&comp->gen);
+
+        Type *exprType = NULL;
+        parseExpr(comp, &exprType, NULL);
+        doImplicitTypeConv(comp, *type, &exprType, NULL, false);
+        typeAssertCompatible(&comp->types, *type, exprType, false);
+
+        genChangeRefCntAssign(&comp->gen, *type);
+    }
 
     *type = typeAddPtrTo(&comp->types, &comp->blocks, *type);
 }
@@ -709,6 +817,7 @@ static void parseBuiltinMakeCall(Compiler *comp, Type **type, Const *constant)
 
 
 // fn copy(array: [] type): [] type
+// fn copy(m: map [keyType] type): map [keyType] type
 static void parseBuiltinCopyCall(Compiler *comp, Type **type, Const *constant)
 {
     if (constant)
@@ -716,17 +825,17 @@ static void parseBuiltinCopyCall(Compiler *comp, Type **type, Const *constant)
 
     // Dynamic array
     parseExpr(comp, type, NULL);
-    typeAssertCompatibleBuiltin(&comp->types, *type, BUILTIN_COPY, (*type)->kind == TYPE_DYNARRAY);
+    typeAssertCompatibleBuiltin(&comp->types, *type, BUILTIN_COPY, (*type)->kind == TYPE_DYNARRAY || (*type)->kind == TYPE_MAP);
 
     // Pointer to result (hidden parameter)
     int resultOffset = identAllocStack(&comp->idents, &comp->types, &comp->blocks, *type);
     genPushLocalPtr(&comp->gen, resultOffset);
 
-    genCallBuiltin(&comp->gen, TYPE_DYNARRAY, BUILTIN_COPY);
+    genCallBuiltin(&comp->gen, (*type)->kind, BUILTIN_COPY);
 }
 
 
-// fn append(array: [] type, item: (^type | [] type), single: bool): [] type
+// fn append(array: [] type, item: (^type | [] type), single: bool, type: Type): [] type
 static void parseBuiltinAppendCall(Compiler *comp, Type **type, Const *constant)
 {
     if (constant)
@@ -770,6 +879,9 @@ static void parseBuiltinAppendCall(Compiler *comp, Type **type, Const *constant)
     // 'Append single item' flag (hidden parameter)
     genPushIntConst(&comp->gen, singleItem);
 
+    // Dynamic array type (hidden parameter)
+    genPushGlobalPtr(&comp->gen, *type);
+
     // Pointer to result (hidden parameter)
     int resultOffset = identAllocStack(&comp->idents, &comp->types, &comp->blocks, *type);
     genPushLocalPtr(&comp->gen, resultOffset);
@@ -778,7 +890,7 @@ static void parseBuiltinAppendCall(Compiler *comp, Type **type, Const *constant)
 }
 
 
-// fn insert(array: [] type, index: int, item: type): [] type
+// fn insert(array: [] type, index: int, item: type, type: Type): [] type
 static void parseBuiltinInsertCall(Compiler *comp, Type **type, Const *constant)
 {
     if (constant)
@@ -813,6 +925,9 @@ static void parseBuiltinInsertCall(Compiler *comp, Type **type, Const *constant)
 
         genPushLocalPtr(&comp->gen, itemOffset);
     }
+
+    // Dynamic array type (hidden parameter)
+    genPushGlobalPtr(&comp->gen, *type);
 
     // Pointer to result (hidden parameter)
     int resultOffset = identAllocStack(&comp->idents, &comp->types, &comp->blocks, *type);
@@ -850,13 +965,13 @@ static void parseBuiltinDeleteCall(Compiler *comp, Type **type, Const *constant)
 }
 
 
-// fn slice(array: [] type | str, startIndex [, endIndex]: int): [] type | str
+// fn slice(array: [] type | str, startIndex [, endIndex]: int, type: Type): [] type | str
 static void parseBuiltinSliceCall(Compiler *comp, Type **type, Const *constant)
 {
     if (constant)
         comp->error.handler(comp->error.context, "Function is not allowed in constant expressions");
 
-    // Dynamic array
+    // Dynamic array or string
     parseExpr(comp, type, NULL);
     typeAssertCompatibleBuiltin(&comp->types, *type, BUILTIN_SLICE, (*type)->kind == TYPE_DYNARRAY || (*type)->kind == TYPE_STR);
 
@@ -879,6 +994,9 @@ static void parseBuiltinSliceCall(Compiler *comp, Type **type, Const *constant)
     }
     else
         genPushIntConst(&comp->gen, INT_MIN);
+
+    // Dynamic array or string type (hidden parameter)
+    genPushGlobalPtr(&comp->gen, *type);
 
     if ((*type)->kind == TYPE_DYNARRAY)
     {
@@ -941,6 +1059,19 @@ static void parseBuiltinLenCall(Compiler *comp, Type **type, Const *constant)
         }
     }
 
+    *type = comp->intType;
+}
+
+
+static void parseBuiltinCapCall(Compiler *comp, Type **type, Const *constant)
+{
+    if (constant)
+        comp->error.handler(comp->error.context, "Function is not allowed in constant expressions");
+
+    parseExpr(comp, type, NULL);
+    typeAssertCompatibleBuiltin(&comp->types, *type, BUILTIN_CAP, (*type)->kind == TYPE_DYNARRAY);
+
+    genCallBuiltin(&comp->gen, TYPE_DYNARRAY, BUILTIN_CAP);
     *type = comp->intType;
 }
 
@@ -1217,6 +1348,7 @@ static void parseBuiltinCall(Compiler *comp, Type **type, Const *constant, Built
         case BUILTIN_DELETE:        parseBuiltinDeleteCall(comp, type, constant);           break;
         case BUILTIN_SLICE:         parseBuiltinSliceCall(comp, type, constant);            break;
         case BUILTIN_LEN:           parseBuiltinLenCall(comp, type, constant);              break;
+        case BUILTIN_CAP:           parseBuiltinCapCall(comp, type, constant);              break;
         case BUILTIN_SIZEOF:        parseBuiltinSizeofCall(comp, type, constant);           break;
         case BUILTIN_SIZEOFSELF:    parseBuiltinSizeofselfCall(comp, type, constant);       break;
         case BUILTIN_SELFHASPTR:    parseBuiltinSelfhasptrCall(comp, type, constant);       break;
@@ -1279,7 +1411,10 @@ static void parseCall(Compiler *comp, Type **type, Const *constant)
         while (1)
         {
             if (numPreHiddenParams + numExplicitParams + numPostHiddenParams > (*type)->sig.numParams - 1)
-                comp->error.handler(comp->error.context, "Too many actual parameters");
+            {
+                char fnTypeBuf[DEFAULT_STR_LEN + 1];
+                comp->error.handler(comp->error.context, "Too many actual parameters to %s", typeSpelling(*type, fnTypeBuf));
+            }
 
             Type *formalParamType = (*type)->sig.param[i]->type;
             Type *actualParamType;
@@ -1296,7 +1431,7 @@ static void parseCall(Compiler *comp, Type **type, Const *constant)
                 parseExpr(comp, &actualParamType, constant);
 
                 doImplicitTypeConv(comp, formalParamType, &actualParamType, constant, false);
-                typeAssertCompatible(&comp->types, formalParamType, actualParamType, false);
+                typeAssertCompatibleParam(&comp->types, formalParamType, actualParamType, *type, numExplicitParams + 1);
             }
 
             doPassParam(comp, formalParamType);
@@ -1317,7 +1452,10 @@ static void parseCall(Compiler *comp, Type **type, Const *constant)
         numDefaultOrVariadicFormalParams = 1;
 
     if (numPreHiddenParams + numExplicitParams + numPostHiddenParams < (*type)->sig.numParams - numDefaultOrVariadicFormalParams)
-        comp->error.handler(comp->error.context, "Too few actual parameters");
+    {
+        char fnTypeBuf[DEFAULT_STR_LEN + 1];
+        comp->error.handler(comp->error.context, "Too few actual parameters to %s", typeSpelling(*type, fnTypeBuf));
+    }
 
     // Push default or variadic parameters, if not specified explicitly
     while (i + numPostHiddenParams < (*type)->sig.numParams)
@@ -1408,7 +1546,7 @@ static void parsePrimary(Compiler *comp, Ident *ident, Type **type, Const *const
             break;
         }
 
-        default: comp->error.handler(comp->error.context, "Illegal identifier");
+        default: comp->error.handler(comp->error.context, "Unexpected identifier %s", ident->name);
     }
 }
 
@@ -1420,10 +1558,15 @@ static void parseTypeCast(Compiler *comp, Type **type, Const *constant)
 
     Type *originalType;
     parseExpr(comp, &originalType, constant);
-    doExplicitTypeConv(comp, *type, &originalType, constant, false);
 
-    if (!typeEquivalent(*type, originalType))
-        comp->error.handler(comp->error.context, "Invalid type cast");
+    Type *castType = originalType;
+    doExplicitTypeConv(comp, *type, &castType, constant, false);
+
+    if (!typeEquivalent(*type, castType))
+    {
+        char srcBuf[DEFAULT_STR_LEN + 1], destBuf[DEFAULT_STR_LEN + 1];
+        comp->error.handler(comp->error.context, "Cannot cast %s to %s", typeSpelling(originalType, srcBuf), typeSpelling(*type, destBuf));
+    }
 
     lexEat(&comp->lex, TOK_RPAR);
 }
@@ -1869,7 +2012,10 @@ static void parseFieldSelector(Compiler *comp, Type **type, Const *constant, boo
     {
         // Field
         if ((*type)->kind != TYPE_STRUCT && (*type)->kind != TYPE_INTERFACE)
-            comp->error.handler(comp->error.context, "Method %s is not found, structure expected to look for field", comp->lex.tok.name);
+        {
+            char typeBuf[DEFAULT_STR_LEN + 1];
+            comp->error.handler(comp->error.context, "Method %s is not found, type %s is not a structure and cannot have fields", comp->lex.tok.name, typeSpelling(*type, typeBuf));
+        }
 
         Field *field = typeAssertFindField(&comp->types, *type, comp->lex.tok.name);
         lexNext(&comp->lex);
@@ -1955,6 +2101,9 @@ void parseDesignator(Compiler *comp, Type **type, Const *constant, bool *isVar, 
         parseTypeCastOrCompositeLiteral(comp, ident, type, constant, isVar, isCall);
 
     parseSelectors(comp, type, constant, isVar, isCall);
+
+    if ((*type)->kind == TYPE_FN && (*type)->sig.method)
+        comp->error.handler(comp->error.context, "Method must be called");
 }
 
 
@@ -2112,6 +2261,7 @@ static void parseFactor(Compiler *comp, Type **type, Const *constant)
             // A value type is already a pointer, a structured type needs to have it added
             if (typeStructured(*type))
                 *type = typeAddPtrTo(&comp->types, &comp->blocks, *type);
+
             break;
         }
 
